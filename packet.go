@@ -224,10 +224,14 @@ func (c *udpPacketConn) writePacket(message *udpMessage) error {
 		if err != nil {
 			return err
 		}
+		stopWatch := context.AfterFunc(c.ctx, func() {
+			_ = stream.SetWriteDeadline(time.Now())
+		})
 		buffer := message.pack()
 		_, err = stream.Write(buffer.Bytes())
 		buffer.Release()
 		stream.Close()
+		stopWatch()
 		if err != nil {
 			return err
 		}
