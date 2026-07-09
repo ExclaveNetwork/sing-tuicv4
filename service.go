@@ -240,7 +240,7 @@ func (s *serverSession[U]) handleUniStream(stream *quic.ReceiveStream) (error, u
 	case CommandAuthenticate:
 		select {
 		case <-s.authDone:
-			// return E.New("authentication: multiple authentication requests"), ErrorCodeAuthenticationFailed
+			return E.New("authentication: multiple authentication requests"), ErrorCodeAuthenticationFailed
 		default:
 		}
 		if buffer.Len() < AuthenticateLen {
