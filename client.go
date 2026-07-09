@@ -403,7 +403,11 @@ func (c *clientConn) Write(b []byte) (int, error) {
 
 func (c *clientConn) Close() error {
 	c.Stream.CancelRead(0)
-	return c.Stream.Close()
+	err := c.Stream.Close()
+	// quic-go's Stream.Close does not unblock a Write blocked on flow control,
+	// but a past write deadline does; buffered data and the FIN are unaffected.
+	c.Stream.SetWriteDeadline(time.Now())
+	return err
 }
 
 func (c *clientConn) LocalAddr() net.Addr {
