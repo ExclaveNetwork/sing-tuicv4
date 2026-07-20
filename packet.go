@@ -208,6 +208,7 @@ func (c *udpPacketConn) inputPacket(message *udpMessage) {
 	select {
 	case c.data <- message:
 	default:
+		message.releaseMessage()
 	}
 }
 
