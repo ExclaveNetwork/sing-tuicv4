@@ -1,4 +1,4 @@
-module github.com/dyhkwong/sing-tuicv4
+module github.com/exclavenetwork/sing-tuicv4
 
 go 1.24.0
 
