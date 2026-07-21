@@ -86,7 +86,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		password:          options.Password,
 		congestionControl: options.CongestionControl,
 		udpStream:         options.UDPStream,
-		udpMTU:            options.UDPMTU,
+		udpMTU:            udpMTU,
 		zeroRTTHandshake:  options.ZeroRTTHandshake,
 		heartbeat:         options.Heartbeat,
 	}, nil
