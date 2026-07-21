@@ -98,7 +98,7 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 		congestionControl: options.CongestionControl,
 		authTimeout:       options.AuthTimeout,
 		udpTimeout:        options.UDPTimeout,
-		udpMTU:            options.UDPMTU,
+		udpMTU:            udpMTU,
 		handler:           options.Handler,
 	}, nil
 }
