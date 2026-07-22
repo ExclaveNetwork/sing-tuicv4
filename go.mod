@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/sagernet/quic-go v0.59.0-sing-box-mod.4
-	github.com/sagernet/sing v0.8.1
+	github.com/sagernet/sing v0.8.3
 	github.com/sagernet/sing-quic v0.6.1
 	lukechampine.com/blake3 v1.4.1
 )

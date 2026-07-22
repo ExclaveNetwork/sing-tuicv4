@@ -122,7 +122,7 @@ func (c *udpPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	select {
 	case pkt := <-c.data:
 		n = copy(p, pkt.data.Bytes())
-		if pkt.destination.IsFqdn() {
+		if pkt.destination.IsDomain() {
 			addr = pkt.destination
 		} else {
 			addr = pkt.destination.UDPAddr()
