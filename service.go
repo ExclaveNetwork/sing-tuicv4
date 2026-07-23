@@ -30,15 +30,16 @@ type ServiceOptions struct {
 	Context           context.Context
 	Logger            logger.Logger
 	TLSConfig         aTLS.ServerConfig
+	QUICConfig        *quic.Config
 	CongestionControl string
 	AuthTimeout       time.Duration
 	ZeroRTTHandshake  bool
 	Heartbeat         time.Duration
 	UDPTimeout        time.Duration
-	UDPMTU            int
 	Handler           ServiceHandler
 
-	allowAllCongestionControl bool // do not export
+	// Deperecated: no-op
+	UDPMTU int
 }
 
 type ServiceHandler interface {
@@ -55,7 +56,6 @@ type Service[U comparable] struct {
 	congestionControl string
 	authTimeout       time.Duration
 	udpTimeout        time.Duration
-	udpMTU            int
 	handler           ServiceHandler
 
 	quicListener io.Closer
@@ -68,26 +68,26 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 	if options.Heartbeat == 0 {
 		options.Heartbeat = 10 * time.Second
 	}
-	quicConfig := &quic.Config{
-		DisablePathMTUDiscovery: !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
-		EnableDatagrams:         true,
-		Allow0RTT:               options.ZeroRTTHandshake,
-		MaxIncomingStreams:      1 << 60,
-		MaxIncomingUniStreams:   1 << 60,
-		DisablePathManager:      true,
-	}
-	switch options.CongestionControl {
-	case "":
-		options.CongestionControl = "cubic"
-	case "cubic", "new_reno", "bbr", "bbr2":
-	default:
-		if !options.allowAllCongestionControl {
-			return nil, E.New("unknown congestion control algorithm: ", options.CongestionControl)
+	quicConfig := options.QUICConfig
+	if quicConfig == nil {
+		quicConfig = &quic.Config{
+			DisablePathMTUDiscovery: !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
+			EnableDatagrams:         true,
+			Allow0RTT:               options.ZeroRTTHandshake,
+			MaxIncomingStreams:      1 << 60,
+			MaxIncomingUniStreams:   1 << 60,
+			DisablePathManager:      true,
 		}
 	}
-	udpMTU := options.UDPMTU
-	if udpMTU == 0 {
-		udpMTU = 1200 - 3
+	congestionControl := options.CongestionControl
+	switch congestionControl {
+	case "":
+		congestionControl = "cubic"
+	case "cubic", "new_reno", "bbr", "bbr2":
+	case "bbr_meta_v1", "bbr_quiche", "bbr2_aggressive":
+		// sing-quic private names
+	default:
+		return nil, E.New("unknown congestion control algorithm: ", congestionControl)
 	}
 	return &Service[U]{
 		ctx:               options.Context,
@@ -95,10 +95,9 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 		tlsConfig:         options.TLSConfig,
 		quicConfig:        quicConfig,
 		userMap:           make(map[[32]byte]U),
-		congestionControl: options.CongestionControl,
+		congestionControl: congestionControl,
 		authTimeout:       options.AuthTimeout,
 		udpTimeout:        options.UDPTimeout,
-		udpMTU:            udpMTU,
 		handler:           options.Handler,
 	}, nil
 }
@@ -394,6 +393,7 @@ type serverConn struct {
 	*quic.Stream
 	destination     M.Socksaddr
 	responseWritten bool
+	writeMu         sync.Mutex
 }
 
 func (c *serverConn) Read(p []byte) (int, error) {
@@ -402,14 +402,16 @@ func (c *serverConn) Read(p []byte) (int, error) {
 }
 
 func (c *serverConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if !c.responseWritten {
 		response := buf.NewSize(3 + len(p))
-		defer response.Release()
-		response.WriteByte(Version)
-		response.WriteByte(CommandResponse)
-		response.WriteByte(OptionResponseSuccess)
-		response.Write(p)
+		common.Must(response.WriteByte(Version))
+		common.Must(response.WriteByte(CommandResponse))
+		common.Must(response.WriteByte(OptionResponseSuccess))
+		common.Must1(response.Write(p))
 		_, err := c.Stream.Write(response.Bytes())
+		response.Release()
 		if err != nil {
 			return 0, wrapQUICError(err)
 		}
