@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"net"
 	"os"
@@ -81,26 +80,26 @@ type udpPacketConn struct {
 	quicConn        *quic.Conn
 	data            chan *udpMessage
 	udpStream       bool
-	udpMTU          int
 	closeOnce       sync.Once
 	isServer        bool
 	onDestroy       func()
 	readWaitOptions N.ReadWaitOptions
 	readDeadline    pipe.Deadline
+	writeDeadline   pipe.Deadline
 }
 
-func newUDPPacketConn(ctx context.Context, quicConn *quic.Conn, udpStream bool, udpMTU int, isServer bool, onDestroy func()) *udpPacketConn {
+func newUDPPacketConn(ctx context.Context, quicConn *quic.Conn, udpStream bool, isServer bool, onDestroy func()) *udpPacketConn {
 	ctx, cancel := common.ContextWithCancelCause(ctx)
 	return &udpPacketConn{
-		ctx:          ctx,
-		cancel:       cancel,
-		quicConn:     quicConn,
-		data:         make(chan *udpMessage, 64),
-		udpStream:    udpStream,
-		isServer:     isServer,
-		onDestroy:    onDestroy,
-		udpMTU:       udpMTU,
-		readDeadline: pipe.MakeDeadline(),
+		ctx:           ctx,
+		cancel:        cancel,
+		quicConn:      quicConn,
+		data:          make(chan *udpMessage, 64),
+		udpStream:     udpStream,
+		isServer:      isServer,
+		onDestroy:     onDestroy,
+		readDeadline:  pipe.MakeDeadline(),
+		writeDeadline: pipe.MakeDeadline(),
 	}
 }
 
@@ -141,9 +140,11 @@ func (c *udpPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr)
 	select {
 	case <-c.ctx.Done():
 		return net.ErrClosed
+	case <-c.writeDeadline.Wait():
+		return os.ErrDeadlineExceeded
 	default:
 	}
-	if c.udpStream && buffer.Len() > 0xffff {
+	if buffer.Len() > 0xffff {
 		return &quic.DatagramTooLargeError{MaxDatagramPayloadSize: 0xffff}
 	}
 	if !destination.IsValid() {
@@ -155,18 +156,8 @@ func (c *udpPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr)
 		destination: destination,
 		data:        buffer,
 	}
-	defer message.releaseMessage()
-	if !c.udpStream && buffer.Len() > c.udpMTU-message.headerSize() {
-		return &quic.DatagramTooLargeError{MaxDatagramPayloadSize: int64(c.udpMTU - message.headerSize())}
-	}
 	err := c.writePacket(message)
-	if err == nil {
-		return nil
-	}
-	var tooLargeErr *quic.DatagramTooLargeError
-	if errors.As(err, &tooLargeErr) {
-		c.udpMTU = int(tooLargeErr.MaxDatagramPayloadSize) - 3
-	}
+	message.releaseMessage()
 	return err
 }
 
@@ -174,9 +165,11 @@ func (c *udpPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	select {
 	case <-c.ctx.Done():
 		return 0, net.ErrClosed
+	case <-c.writeDeadline.Wait():
+		return 0, os.ErrDeadlineExceeded
 	default:
 	}
-	if c.udpStream && len(p) > 0xffff {
+	if len(p) > 0xffff {
 		return 0, &quic.DatagramTooLargeError{MaxDatagramPayloadSize: 0xffff}
 	}
 	destination := M.SocksaddrFromNet(addr)
@@ -189,19 +182,12 @@ func (c *udpPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		destination: destination,
 		data:        buf.As(p),
 	}
-	defer message.releaseMessage()
-	if !c.udpStream && len(p) > c.udpMTU-message.headerSize() {
-		return 0, &quic.DatagramTooLargeError{MaxDatagramPayloadSize: int64(c.udpMTU - message.headerSize())}
-	}
 	err = c.writePacket(message)
-	if err == nil {
-		return len(p), nil
+	message.releaseMessage()
+	if err != nil {
+		return 0, err
 	}
-	var tooLargeErr *quic.DatagramTooLargeError
-	if errors.As(err, &tooLargeErr) {
-		c.udpMTU = int(tooLargeErr.MaxDatagramPayloadSize) - 3
-	}
-	return 0, err
+	return len(p), nil
 }
 
 func (c *udpPacketConn) inputPacket(message *udpMessage) {
@@ -253,15 +239,15 @@ func (c *udpPacketConn) closeWithError(err error) {
 	if !c.isServer {
 		buffer := buf.NewSize(6)
 		defer buffer.Release()
-		buffer.WriteByte(Version)
-		buffer.WriteByte(CommandDissociate)
-		binary.Write(buffer, binary.BigEndian, c.sessionID)
+		common.Must(buffer.WriteByte(Version))
+		common.Must(buffer.WriteByte(CommandDissociate))
+		common.Must(binary.Write(buffer, binary.BigEndian, c.sessionID))
 		sendStream, openErr := c.quicConn.OpenUniStream()
 		if openErr != nil {
 			return
 		}
-		defer sendStream.Close()
 		sendStream.Write(buffer.Bytes())
+		sendStream.Close()
 	}
 }
 
@@ -270,7 +256,9 @@ func (c *udpPacketConn) LocalAddr() net.Addr {
 }
 
 func (c *udpPacketConn) SetDeadline(t time.Time) error {
-	return os.ErrInvalid
+	c.readDeadline.Set(t)
+	c.writeDeadline.Set(t)
+	return nil
 }
 
 func (c *udpPacketConn) SetReadDeadline(t time.Time) error {
@@ -279,7 +267,8 @@ func (c *udpPacketConn) SetReadDeadline(t time.Time) error {
 }
 
 func (c *udpPacketConn) SetWriteDeadline(t time.Time) error {
-	return os.ErrInvalid
+	c.writeDeadline.Set(t)
+	return nil
 }
 
 func readUDPMessage(message *udpMessage, reader io.Reader) error {

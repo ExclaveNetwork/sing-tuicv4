@@ -1,6 +1,7 @@
 package tuicv4
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -25,15 +26,16 @@ type ClientOptions struct {
 	Dialer            N.Dialer
 	ServerAddress     M.Socksaddr
 	TLSConfig         aTLS.Config
+	QUICConfig        *quic.Config
 	QUICOptions       qtls.QUICOptions
 	Password          string
 	CongestionControl string
 	UDPStream         bool
-	UDPMTU            int
 	ZeroRTTHandshake  bool
 	Heartbeat         time.Duration
 
-	allowAllCongestionControl bool // do not export
+	// Deperecated: no-op
+	UDPMTU int
 }
 
 type Client struct {
@@ -45,7 +47,6 @@ type Client struct {
 	password          string
 	congestionControl string
 	udpStream         bool
-	udpMTU            int
 	zeroRTTHandshake  bool
 	heartbeat         time.Duration
 
@@ -58,24 +59,24 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if options.Heartbeat == 0 {
 		options.Heartbeat = 10 * time.Second
 	}
-	quicConfig := &quic.Config{
-		DisablePathMTUDiscovery: !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
-		EnableDatagrams:         true,
-		MaxIncomingUniStreams:   1 << 60,
-	}
-	qtls.ApplyQUICOptions(quicConfig, options.QUICOptions)
-	switch options.CongestionControl {
-	case "":
-		options.CongestionControl = "cubic"
-	case "cubic", "new_reno", "bbr", "bbr2":
-	default:
-		if !options.allowAllCongestionControl {
-			return nil, E.New("unknown congestion control algorithm: ", options.CongestionControl)
+	quicConfig := options.QUICConfig
+	if quicConfig == nil {
+		quicConfig = &quic.Config{
+			DisablePathMTUDiscovery: !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
+			EnableDatagrams:         !options.UDPStream,
+			MaxIncomingUniStreams:   1 << 60,
 		}
+		qtls.ApplyQUICOptions(quicConfig, options.QUICOptions)
 	}
-	udpMTU := options.UDPMTU
-	if udpMTU == 0 {
-		udpMTU = 1200 - 3
+	congestionControl := options.CongestionControl
+	switch congestionControl {
+	case "":
+		congestionControl = "cubic"
+	case "cubic", "new_reno", "bbr", "bbr2":
+	case "bbr_meta_v1", "bbr_quiche", "bbr2_aggressive":
+		// sing-quic private names
+	default:
+		return nil, E.New("unknown congestion control algorithm: ", congestionControl)
 	}
 	return &Client{
 		ctx:               options.Context,
@@ -84,9 +85,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		tlsConfig:         options.TLSConfig,
 		quicConfig:        quicConfig,
 		password:          options.Password,
-		congestionControl: options.CongestionControl,
+		congestionControl: congestionControl,
 		udpStream:         options.UDPStream,
-		udpMTU:            udpMTU,
 		zeroRTTHandshake:  options.ZeroRTTHandshake,
 		heartbeat:         options.Heartbeat,
 	}, nil
@@ -201,17 +201,19 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) clientHandshake(conn *quic.Conn) error {
+	tuicAuthToken := blake3.Sum256([]byte(c.password))
+	authRequest := buf.NewSize(AuthenticateLen)
+	common.Must(authRequest.WriteByte(Version))
+	common.Must(authRequest.WriteByte(CommandAuthenticate))
+	common.Must1(authRequest.Write(tuicAuthToken[:]))
 	authStream, err := conn.OpenUniStream()
 	if err != nil {
 		return E.Cause(err, "open handshake stream")
 	}
-	defer authStream.Close()
-	tuicAuthToken := blake3.Sum256([]byte(c.password))
-	authRequest := buf.NewSize(AuthenticateLen)
-	authRequest.WriteByte(Version)
-	authRequest.WriteByte(CommandAuthenticate)
-	authRequest.Write(tuicAuthToken[:])
-	return common.Error(authStream.Write(authRequest.Bytes()))
+	_, err = authStream.Write(authRequest.Bytes())
+	authRequest.Release()
+	authStream.Close()
+	return err
 }
 
 func (c *Client) loopHeartbeats(conn *clientQUICConnection) {
@@ -254,7 +256,7 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 		return nil, err
 	}
 	var sessionID uint32
-	clientPacketConn := newUDPPacketConn(c.ctx, conn.quicConn, c.udpStream, c.udpMTU, false, func() {
+	clientPacketConn := newUDPPacketConn(c.ctx, conn.quicConn, c.udpStream, false, func() {
 		conn.udpAccess.Lock()
 		delete(conn.udpConnMap, sessionID)
 		conn.udpAccess.Unlock()
@@ -331,6 +333,11 @@ func (c *clientQUICConnection) closeWithError(err error) {
 	})
 }
 
+var (
+	_ net.Conn      = (*clientConn)(nil)
+	_ N.EarlyWriter = (*clientConn)(nil)
+)
+
 type clientConn struct {
 	*quic.Stream
 	parent         *clientQUICConnection
@@ -339,40 +346,37 @@ type clientConn struct {
 	responseRead   bool
 }
 
-func (c *clientConn) NeedHandshake() bool {
+func (c *clientConn) NeedHandshakeForWrite() bool {
 	return !c.requestWritten
 }
 
 func (c *clientConn) Read(b []byte) (int, error) {
 	if !c.responseRead {
-		// TUIC is not resistant to active detection at all,
-		// so it is okay to read byte-by-byte.
-		var data [1]byte
-		_, err := c.Stream.Read(data[:])
+		buffer := buf.New()
+		defer buffer.Release()
+		_, err := buffer.ReadAtLeastFrom(c.Stream, 3)
 		if err != nil {
-			return 0, wrapQUICError(err)
+			return 0, err
 		}
-		if data[0] != Version {
-			return 0, E.New("unknown version: ", data[0])
+		version := buffer.Byte(0)
+		if version != Version {
+			return 0, E.New("unknown version: ", version)
 		}
-		_, err = c.Stream.Read(data[:])
-		if err != nil {
-			return 0, wrapQUICError(err)
+		command := buffer.Byte(1)
+		if command != CommandResponse {
+			return 0, E.New("unknown command: ", command)
 		}
-		if data[0] != CommandResponse {
-			return 0, E.New("unknown command: ", data[0])
-		}
-		_, err = c.Stream.Read(data[:])
-		if err != nil {
-			return 0, wrapQUICError(err)
-		}
-		if data[0] == OptionResponseFailed {
+		option := buffer.Byte(2)
+		if option == OptionResponseFailed {
 			return 0, E.New("response failed")
 		}
-		if data[0] != OptionResponseSuccess {
-			return 0, E.New("unknown response: ", data[0])
+		if option != OptionResponseSuccess {
+			return 0, E.New("unknown response option: ", option)
 		}
 		c.responseRead = true
+		reader := io.MultiReader(bytes.NewReader(buffer.From(3)), c.Stream)
+		n, err := reader.Read(b)
+		return n, wrapQUICError(err)
 	}
 	n, err := c.Stream.Read(b)
 	return n, wrapQUICError(err)
@@ -381,15 +385,12 @@ func (c *clientConn) Read(b []byte) (int, error) {
 func (c *clientConn) Write(b []byte) (int, error) {
 	if !c.requestWritten {
 		request := buf.NewSize(2 + AddressSerializer.AddrPortLen(c.destination) + len(b))
-		defer request.Release()
-		request.WriteByte(Version)
-		request.WriteByte(CommandConnect)
-		err := AddressSerializer.WriteAddrPort(request, c.destination)
-		if err != nil {
-			return 0, wrapQUICError(err)
-		}
-		request.Write(b)
-		_, err = c.Stream.Write(request.Bytes())
+		common.Must(request.WriteByte(Version))
+		common.Must(request.WriteByte(CommandConnect))
+		common.Must(AddressSerializer.WriteAddrPort(request, c.destination))
+		common.Must1(request.Write(b))
+		_, err := c.Stream.Write(request.Bytes())
+		request.Release()
 		if err != nil {
 			c.parent.closeWithError(E.Cause(err, "create new connection"))
 			return 0, wrapQUICError(err)
