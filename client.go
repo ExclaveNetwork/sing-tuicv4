@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -259,6 +260,12 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 		conn.udpAccess.Unlock()
 	})
 	conn.udpAccess.Lock()
+	select {
+	case <-conn.connDone:
+		conn.udpAccess.Unlock()
+		return nil, E.Errors(conn.connErr, os.ErrClosed)
+	default:
+	}
 	sessionID = conn.udpSessionID
 	conn.udpSessionID++
 	conn.udpConnMap[sessionID] = clientPacketConn
@@ -324,7 +331,14 @@ func (c *clientQUICConnection) active() bool {
 func (c *clientQUICConnection) closeWithError(err error) {
 	c.closeOnce.Do(func() {
 		c.connErr = err
+		c.udpAccess.Lock()
 		close(c.connDone)
+		udpConnMap := c.udpConnMap
+		c.udpConnMap = make(map[uint32]*udpPacketConn)
+		c.udpAccess.Unlock()
+		for _, udpConn := range udpConnMap {
+			udpConn.closeWithError(err)
+		}
 		_ = c.quicConn.CloseWithError(0, "")
 		_ = c.rawConn.Close()
 	})
