@@ -23,7 +23,7 @@ func setCongestion(ctx context.Context, connection *quic.Conn, congestionName st
 		connection.SetCongestionControl(
 			congestion_meta1.NewCubicSender(
 				congestion_meta1.DefaultClock{TimeFunc: timeFunc},
-				congestion.ByteCount(connection.Config().InitialPacketSize),
+				connection.InitialPacketSize(),
 				false,
 			),
 		)
@@ -31,42 +31,42 @@ func setCongestion(ctx context.Context, connection *quic.Conn, congestionName st
 		connection.SetCongestionControl(
 			congestion_meta1.NewCubicSender(
 				congestion_meta1.DefaultClock{TimeFunc: timeFunc},
-				congestion.ByteCount(connection.Config().InitialPacketSize),
+				connection.InitialPacketSize(),
 				true,
 			),
 		)
 	case "bbr_meta_v1":
 		connection.SetCongestionControl(congestion_meta1.NewBBRSender(
 			congestion_meta1.DefaultClock{TimeFunc: timeFunc},
-			congestion.ByteCount(connection.Config().InitialPacketSize),
+			connection.InitialPacketSize(),
 			congestion_meta1.InitialCongestionWindow*congestion_meta1.InitialMaxDatagramSize,
 			congestion_meta1.DefaultBBRMaxCongestionWindow*congestion_meta1.InitialMaxDatagramSize,
 		))
 	case "bbr":
 		connection.SetCongestionControl(congestion_meta2.NewBbrSender(
 			congestion_meta2.DefaultClock{TimeFunc: timeFunc},
-			congestion.ByteCount(connection.Config().InitialPacketSize),
+			connection.InitialPacketSize(),
 			congestion.ByteCount(congestion_meta1.InitialCongestionWindow),
 		))
 	case "bbr_quiche":
 		connection.SetCongestionControl(congestion_bbr1.NewBbrSender(
 			congestion_bbr1.DefaultClock{TimeFunc: timeFunc},
-			congestion.ByteCount(connection.Config().InitialPacketSize),
+			connection.InitialPacketSize(),
 			congestion_bbr1.InitialCongestionWindowPackets,
 			congestion_bbr1.MaxCongestionWindowPackets,
 		))
 	case "bbr2":
 		connection.SetCongestionControl(congestion_bbr2.NewBBR2Sender(
 			congestion_bbr2.DefaultClock{TimeFunc: timeFunc},
-			congestion.ByteCount(connection.Config().InitialPacketSize),
+			connection.InitialPacketSize(),
 			0,
 			false,
 		))
 	case "bbr2_aggressive":
 		connection.SetCongestionControl(congestion_bbr2.NewBBR2Sender(
 			congestion_bbr2.DefaultClock{TimeFunc: timeFunc},
-			congestion.ByteCount(connection.Config().InitialPacketSize),
-			32*congestion.ByteCount(connection.Config().InitialPacketSize),
+			connection.InitialPacketSize(),
+			32*connection.InitialPacketSize(),
 			true,
 		))
 	}
