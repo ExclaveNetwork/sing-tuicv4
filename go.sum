@@ -16,8 +16,8 @@ github.com/sagernet/quic-go v0.61.0-sing-box-mod.1 h1:ER31GLdh9u/06s1NmZ7zAL4hQK
 github.com/sagernet/quic-go v0.61.0-sing-box-mod.1/go.mod h1:hmLC8GJPp+BrpBgrgJnacvI4fZGIhasuy1ROJJ8GR4E=
 github.com/sagernet/sing v0.8.5-0.20260411123740-2a8053daaf99 h1:oxumvWpPgPMXBZyhig/hsj1GEHRYy2SW5e4frBw1d9s=
 github.com/sagernet/sing v0.8.5-0.20260411123740-2a8053daaf99/go.mod h1:ARkL0gM13/Iv5VCZmci/NuoOlePoIsW0m7BWfln/Hak=
-github.com/sagernet/sing-quic v0.6.2-0.20260412143638-8f65b6be7cd6 h1:j3ISQRDyY5rs27NzUS/le+DHR0iOO0K0x+mWDLzu4Ok=
-github.com/sagernet/sing-quic v0.6.2-0.20260412143638-8f65b6be7cd6/go.mod h1:r5Adw0EMUyhGBCjPI2JEupDtC040DrrvreXtua7Ifdc=
+github.com/sagernet/sing-quic v0.6.4 h1:BmGPebxcVICOkyBkn8a+fAfAB41zU9i83SMzObiu9bo=
+github.com/sagernet/sing-quic v0.6.4/go.mod h1:+1lz5Rdw0+kAxRoJ9FW5RIott5OOAlS3QXKkwN6hR64=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 golang.org/x/crypto v0.54.0 h1:YLIA59K4fiNzHzjnZt2tUJQjQtUWfWbeHBqKtk3eScw=
