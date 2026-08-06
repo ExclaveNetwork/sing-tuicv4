@@ -77,7 +77,6 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 			Allow0RTT:               options.ZeroRTTHandshake,
 			MaxIncomingStreams:      1 << 60,
 			MaxIncomingUniStreams:   1 << 60,
-			DisablePathManager:      true,
 		}
 		qtls.ApplyQUICOptions(quicConfig, options.QUICOptions)
 	}
