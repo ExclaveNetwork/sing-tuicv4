@@ -117,7 +117,7 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 	if offerCtx == nil {
 		offerCtx = context.Background()
 	}
-	offerCtx, cancel := common.ContextWithCancelCause(offerCtx)
+	offerCtx, cancel := context.WithCancelCause(offerCtx)
 	pending = &clientOffer{
 		done:   make(chan struct{}),
 		cancel: cancel,
