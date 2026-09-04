@@ -245,13 +245,14 @@ func (c *Client) DialConn(ctx context.Context, destination M.Socksaddr) (net.Con
 	}
 	stream, err := conn.quicConn.OpenStream()
 	if err != nil {
-		conn.releaseStream()
+		conn.releaseStream(false)
 		return nil, err
 	}
 	return &clientConn{
 		Stream:      stream,
 		parent:      conn,
 		destination: destination,
+		keepSession: qtls.KeepSessionFromContext(ctx),
 	}, nil
 }
 
@@ -369,10 +370,10 @@ func (c *clientQUICConnection) acquireStream() error {
 	return nil
 }
 
-func (c *clientQUICConnection) releaseStream() {
+func (c *clientQUICConnection) releaseStream(keepSession bool) {
 	c.access.Lock()
 	c.streams--
-	drained := c.closeIdle.Load() && c.streams == 0 && len(c.udpConnMap) == 0
+	drained := c.closeIdle.Load() && !keepSession && c.streams == 0 && len(c.udpConnMap) == 0
 	c.access.Unlock()
 	if drained {
 		c.closeWithError(os.ErrClosed)
@@ -414,6 +415,7 @@ type clientConn struct {
 	*quic.Stream
 	parent         *clientQUICConnection
 	destination    M.Socksaddr
+	keepSession    bool
 	requestWritten bool
 	responseRead   bool
 	closeOnce      sync.Once
@@ -481,7 +483,7 @@ func (c *clientConn) Close() error {
 	// quic-go's Stream.Close does not unblock a Write blocked on flow control,
 	// but a past write deadline does; buffered data and the FIN are unaffected.
 	c.Stream.SetWriteDeadline(time.Now())
-	c.closeOnce.Do(c.parent.releaseStream)
+	c.closeOnce.Do(func() { c.parent.releaseStream(c.keepSession) })
 	return err
 }
 
