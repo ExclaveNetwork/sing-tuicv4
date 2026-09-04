@@ -301,9 +301,12 @@ func (c *Client) CloseWithError(err error) error {
 
 func (c *Client) SetKeepIdleConnections(keep bool) {
 	c.closeIdle.Store(!keep)
-	if keep {
-		return
+	if !keep {
+		c.CloseIdleConnections()
 	}
+}
+
+func (c *Client) CloseIdleConnections() {
 	c.connAccess.Lock()
 	conn := c.conn
 	c.connAccess.Unlock()
