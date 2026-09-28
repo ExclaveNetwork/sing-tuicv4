@@ -184,6 +184,7 @@ type serverSession[U comparable] struct {
 	connAccess sync.Mutex
 	connDone   chan struct{}
 	connErr    error
+	authAccess sync.Mutex
 	authDone   chan struct{}
 	authUser   U
 	udpAccess  sync.RWMutex
@@ -236,11 +237,6 @@ func (s *serverSession[U]) handleUniStream(stream *quic.ReceiveStream) (error, u
 	command := buffer.Byte(1)
 	switch command {
 	case CommandAuthenticate:
-		select {
-		case <-s.authDone:
-			return E.New("authentication: multiple authentication requests"), ErrorCodeAuthenticationFailed
-		default:
-		}
 		if buffer.Len() < AuthenticateLen {
 			_, err = buffer.ReadFullFrom(stream, AuthenticateLen-buffer.Len())
 			if err != nil {
@@ -252,6 +248,13 @@ func (s *serverSession[U]) handleUniStream(stream *quic.ReceiveStream) (error, u
 		user, loaded := s.userMap[userHash]
 		if !loaded {
 			return E.New("authentication: unknown user blake3 hash ", hex.EncodeToString(userHash[:])), ErrorCodeAuthenticationFailed
+		}
+		s.authAccess.Lock()
+		defer s.authAccess.Unlock()
+		select {
+		case <-s.authDone:
+			return E.New("authentication: multiple authentication requests"), ErrorCodeAuthenticationFailed
+		default:
 		}
 		s.authUser = user
 		close(s.authDone)
