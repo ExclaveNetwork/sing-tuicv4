@@ -150,6 +150,9 @@ func (c *udpPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr)
 	if !destination.IsValid() {
 		return E.New("invalid destination address")
 	}
+	if !destination.IsIP() && len(destination.Fqdn) > 255 {
+		return E.New("fqdn too long")
+	}
 	message := allocMessage()
 	*message = udpMessage{
 		sessionID:   c.sessionID,
@@ -175,6 +178,9 @@ func (c *udpPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	destination := M.SocksaddrFromNet(addr)
 	if !destination.IsValid() {
 		return 0, E.New("invalid destination address")
+	}
+	if !destination.IsIP() && len(destination.Fqdn) > 255 {
+		return 0, E.New("fqdn too long")
 	}
 	message := allocMessage()
 	*message = udpMessage{
